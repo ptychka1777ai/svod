@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: svod
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: svod-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: TZ
+        value: Europe/Kiev
+      - key: TELEGRAM_CHAT_ID
+        value: "439079989"
+      - key: APP_PASSWORD
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
