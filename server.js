@@ -17,6 +17,7 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
 const PUBLIC_URL = (process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 const TG_SECRET = TG_TOKEN ? crypto.createHash('sha256').update('svod:' + TG_TOKEN).digest('hex').slice(0, 48) : '';
 const STATUS_IDS = ['idea', 'todo', 'doing', 'done'];
+const DIGEST_HOUR = parseInt(process.env.DIGEST_HOUR || '8', 10);
 
 fs.mkdirSync(FILES_DIR, { recursive: true });
 
@@ -82,7 +83,7 @@ function cleanItem(b, isNew) {
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-app.get('/healthz', function (req, res) { res.type('text').send('ok'); });
+app.get('/healthz', function (req, res) { res.type('text').send('ok v2.1'); });
 
 function auth(req, res, next) {
   if (!APP_PASSWORD) return next();
@@ -198,6 +199,14 @@ function tg(method, payload) {
 
 function send(chatId, text) {
   return tg('sendMessage', { chat_id: chatId, text: text, disable_web_page_preview: true });
+}
+
+function sendKb(chatId, text, kb) {
+  return tg('sendMessage', { chat_id: chatId, text: text, disable_web_page_preview: true, reply_markup: { inline_keyboard: kb } });
+}
+
+function editKb(chatId, messageId, text, kb) {
+  return tg('editMessageText', { chat_id: chatId, message_id: messageId, text: text, disable_web_page_preview: true, reply_markup: { inline_keyboard: kb } });
 }
 
 async function tgFile(fileId) {
@@ -337,25 +346,147 @@ function confirmText(item) {
   return out;
 }
 
+/* ---------- панель управления (/menu) ---------- */
+
+function activeTasks() {
+  return db.items.filter(function (i) { return i.kind === 'task' && (i.status === 'todo' || i.status === 'doing'); });
+}
+
+function byDuePrio(a, b) {
+  const ad = a.due || '9999', bd = b.due || '9999';
+  if (ad !== bd) return ad < bd ? -1 : 1;
+  return (b.priority || 0) - (a.priority || 0);
+}
+
+function fmtDue(d) { return d ? d.slice(8, 10) + '.' + d.slice(5, 7) : ''; }
+
+function taskLine(i, today) {
+  const bits = [];
+  if (i.due) bits.push((i.due < today ? '❗ ' : '') + fmtDue(i.due));
+  if (i.priority) bits.push(PRIO_NAMES[i.priority]);
+  if (i.status === 'doing') bits.push('в работе');
+  return '• ' + i.title + (bits.length ? ' (' + bits.join(', ') + ')' : '');
+}
+
+function capList(lines, n) {
+  return lines.length <= n ? lines : lines.slice(0, n).concat(['…и ещё ' + (lines.length - n)]);
+}
+
 function listText() {
-  const act = db.items
-    .filter(function (i) { return i.kind === 'task' && (i.status === 'todo' || i.status === 'doing'); })
-    .sort(function (a, b) {
-      const ad = a.due || '9999', bd = b.due || '9999';
-      if (ad !== bd) return ad < bd ? -1 : 1;
-      return (b.priority || 0) - (a.priority || 0);
-    })
-    .slice(0, 12);
+  const today = kyivToday();
+  const act = activeTasks().sort(byDuePrio);
   if (!act.length) return 'Активных задач нет 🎉';
-  return 'Активные задачи:\n' + act.map(function (i) {
-    let line = '• ' + i.title;
-    const bits = [];
-    if (i.due) bits.push(i.due);
-    if (i.priority) bits.push(PRIO_NAMES[i.priority]);
-    if (i.status === 'doing') bits.push('в работе');
-    if (bits.length) line += ' (' + bits.join(', ') + ')';
-    return line;
-  }).join('\n');
+  return '📋 Активные задачи:\n' + capList(act.map(function (i) { return taskLine(i, today); }), 15).join('\n');
+}
+
+function todayText(withGreeting) {
+  const today = kyivToday();
+  const act = activeTasks();
+  const dueToday = act.filter(function (i) { return i.due === today; }).sort(byDuePrio);
+  const overdue = act.filter(function (i) { return i.due && i.due < today; }).sort(byDuePrio);
+  const parts = [];
+  if (withGreeting) parts.push('☀️ Доброе утро! ' + kyivDateHuman() + '.');
+  if (dueToday.length) parts.push('📅 На сегодня:\n' + capList(dueToday.map(function (i) { return taskLine(i, today); }), 12).join('\n'));
+  if (overdue.length) parts.push('❗ Просрочено:\n' + capList(overdue.map(function (i) { return taskLine(i, today); }), 12).join('\n'));
+  if (!dueToday.length && !overdue.length) parts.push('Задач со сроком на сегодня нет 🎉' + (act.length ? '\nВсего активных: ' + act.length : ''));
+  return parts.join('\n\n');
+}
+
+function ideasText() {
+  const ideas = db.items.filter(function (i) { return i.kind === 'task' && i.status === 'idea'; });
+  if (!ideas.length) return 'Идей пока нет 💡 Напишите или наговорите мысль — я запишу её в идеи.';
+  return '💡 Идеи:\n' + capList(ideas.map(function (i) { return '• ' + i.title; }), 15).join('\n');
+}
+
+function libText() {
+  const mats = db.items.filter(function (i) { return i.kind === 'material'; });
+  if (!mats.length) return 'Библиотека пуста 📚 Пришлите ссылку на статью или видео — сохраню.';
+  const out = mats.slice(0, 10).map(function (i) {
+    const link = i.url && /^https?:/.test(i.url) ? '\n   ' + i.url : '';
+    return '• ' + i.title + link;
+  });
+  return '📚 Библиотека' + (mats.length > 10 ? ' (последние 10 из ' + mats.length + ')' : '') + ':\n' + out.join('\n');
+}
+
+function statsText() {
+  const today = kyivToday();
+  const tasks = db.items.filter(function (i) { return i.kind === 'task'; });
+  function n(s) { return tasks.filter(function (i) { return i.status === s; }).length; }
+  const act = activeTasks();
+  const overdue = act.filter(function (i) { return i.due && i.due < today; }).length;
+  const dueToday = act.filter(function (i) { return i.due === today; }).length;
+  return '📊 Сводка:\n' +
+    '• на сегодня: ' + dueToday + (overdue ? ' · просрочено: ' + overdue : '') + '\n' +
+    '• в очереди: ' + n('todo') + ' · в работе: ' + n('doing') + '\n' +
+    '• идей: ' + n('idea') + ' · сделано: ' + n('done') + '\n' +
+    '• материалов в библиотеке: ' + (db.items.length - tasks.length);
+}
+
+const BACK_KB = [[{ text: '‹ Меню', callback_data: 'menu' }]];
+
+function viewMenu() {
+  return {
+    text: '🗂 Свод — панель управления. Что показать?',
+    kb: [
+      [{ text: '📅 Сегодня', callback_data: 'v:today' }, { text: '📋 Активные', callback_data: 'v:active' }],
+      [{ text: '💡 Идеи', callback_data: 'v:ideas' }, { text: '📚 Библиотека', callback_data: 'v:lib' }],
+      [{ text: '📁 Проекты', callback_data: 'v:proj' }, { text: '📊 Сводка', callback_data: 'v:stats' }]
+    ]
+  };
+}
+
+function viewProjects() {
+  const act = activeTasks();
+  const rows = db.projects.map(function (p) {
+    const n = act.filter(function (i) { return i.projectId === p.id; }).length;
+    return [{ text: '📁 ' + p.name + (n ? ' — ' + n : ''), callback_data: 'p:' + p.id }];
+  });
+  rows.push(BACK_KB[0]);
+  return { text: '📁 Проекты (и число активных задач):', kb: rows };
+}
+
+function projectText(id) {
+  const p = db.projects.find(function (x) { return x.id === id; });
+  if (!p) return 'Проект не найден.';
+  const today = kyivToday();
+  const tasks = activeTasks().filter(function (i) { return i.projectId === id; }).sort(byDuePrio);
+  if (!tasks.length) return '📁 ' + p.name + ': активных задач нет 🎉';
+  return '📁 ' + p.name + ':\n' + capList(tasks.map(function (i) { return taskLine(i, today); }), 15).join('\n');
+}
+
+function viewFor(data) {
+  if (data === 'menu') return viewMenu();
+  if (data === 'v:today') return { text: todayText(false), kb: BACK_KB };
+  if (data === 'v:active') return { text: listText(), kb: BACK_KB };
+  if (data === 'v:ideas') return { text: ideasText(), kb: BACK_KB };
+  if (data === 'v:lib') return { text: libText(), kb: BACK_KB };
+  if (data === 'v:proj') return viewProjects();
+  if (data === 'v:stats') return { text: statsText(), kb: BACK_KB };
+  if (data.slice(0, 2) === 'p:') {
+    return { text: projectText(data.slice(2)), kb: [[{ text: '‹ Проекты', callback_data: 'v:proj' }, { text: '‹ Меню', callback_data: 'menu' }]] };
+  }
+  return null;
+}
+
+/* ---------- утренняя сводка ---------- */
+
+function kyivHour() {
+  return parseInt(new Date().toLocaleString('en-GB', { timeZone: 'Europe/Kyiv', hour: '2-digit', hour12: false }), 10);
+}
+
+function kyivDateHuman() {
+  const s = new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Kyiv', weekday: 'long', day: 'numeric', month: 'long' });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+async function morningDigest() {
+  if (!TG_TOKEN || !TG_CHAT) return;
+  const today = kyivToday();
+  const h = kyivHour();
+  if (h < DIGEST_HOUR || h > DIGEST_HOUR + 2 || db.digestDate === today) return;
+  await send(TG_CHAT, todayText(true));
+  db.digestDate = today;
+  saveDB();
 }
 
 const HELP = 'Я записываю всё в ваш «Свод».\n\n' +
@@ -363,9 +494,22 @@ const HELP = 'Я записываю всё в ваш «Свод».\n\n' +
   '— Отправьте голосовое — распознаю и создам задачу.\n' +
   '— Пришлите фото (записку, скриншот, афишу) — пойму, что на нём, и создам запись.\n' +
   '— Ссылка на статью или видео — сохраню в библиотеку.\n\n' +
-  'Команды:\n/list — активные задачи\n/help — эта подсказка';
+  'Каждое утро в ' + DIGEST_HOUR + ':00 пришлю план на день.\n\n' +
+  'Команды:\n/menu — панель управления\n/list — активные задачи\n/help — эта подсказка';
+
+async function handleCallback(cb) {
+  tg('answerCallbackQuery', { callback_query_id: cb.id }).catch(function () {});
+  const chat = cb.message && cb.message.chat;
+  if (!chat) return;
+  const chatId = String(chat.id);
+  if (TG_CHAT && chatId !== TG_CHAT) return;
+  const view = viewFor(String(cb.data || ''));
+  if (!view) return;
+  await editKb(chatId, cb.message.message_id, view.text, view.kb);
+}
 
 async function handleUpdate(update) {
+  if (update.callback_query) { await handleCallback(update.callback_query); return; }
   const msg = update.message;
   if (!msg || !msg.chat) return;
   const chatId = String(msg.chat.id);
@@ -376,6 +520,7 @@ async function handleUpdate(update) {
   const text = (msg.text || '').trim();
 
   if (text === '/start' || text === '/help') { await send(chatId, HELP); return; }
+  if (text === '/menu' || text.toLowerCase() === 'меню') { const m = viewMenu(); await sendKb(chatId, m.text, m.kb); return; }
   if (text === '/list' || text.toLowerCase() === 'задачи') { await send(chatId, listText()); return; }
 
   /* голосовые и аудио */
@@ -440,10 +585,11 @@ async function initTelegram() {
   if (!TG_TOKEN) { console.log('Telegram: TELEGRAM_BOT_TOKEN не задан — бот выключен'); return; }
   if (!PUBLIC_URL) { console.log('Telegram: нет RENDER_EXTERNAL_URL — webhook не установлен'); return; }
   try {
-    const r = await tg('setWebhook', { url: PUBLIC_URL + '/tg-webhook', secret_token: TG_SECRET, allowed_updates: ['message'] });
+    const r = await tg('setWebhook', { url: PUBLIC_URL + '/tg-webhook', secret_token: TG_SECRET, allowed_updates: ['message', 'callback_query'] });
     console.log('Telegram webhook:', JSON.stringify(r));
     await tg('setMyCommands', {
       commands: [
+        { command: 'menu', description: 'Панель управления' },
         { command: 'list', description: 'Активные задачи' },
         { command: 'help', description: 'Как пользоваться' }
       ]
@@ -454,4 +600,5 @@ async function initTelegram() {
 app.listen(PORT, function () {
   console.log('🗂 Свод запущен на порту ' + PORT + (APP_PASSWORD ? ' (вход по паролю)' : ' (ВНИМАНИЕ: пароль не задан)'));
   initTelegram();
+  setInterval(function () { morningDigest().catch(function (e) { console.error('digest:', e); }); }, 60 * 1000);
 });

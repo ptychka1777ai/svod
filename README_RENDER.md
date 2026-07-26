@@ -44,6 +44,7 @@ Render Web Service «svod» (план Starter, ~$7/мес)
 | `TELEGRAM_BOT_TOKEN` | токен из шага 1 (от BotFather) |
 | `OPENAI_API_KEY` | на вашем Mac: файл `~/Desktop/Project1/.env`, строка `OPENAI_API_KEY=` — скопируйте значение (нужен для голосовых и фото) |
 | `TELEGRAM_CHAT_ID` | уже заполнено (439079989) — ваш chat id из дентарт-бота |
+| `DIGEST_HOUR` | необязательно: час утренней сводки по Киеву (по умолчанию 8) |
 
 ## Шаг 4. Дождаться деплоя
 
