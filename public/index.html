@@ -250,6 +250,20 @@
     .tabsbar{padding:0 16px;}
     .board,.list,.cal,.lib{padding-left:16px;padding-right:16px;}
   }
+  @media (max-width:640px){
+    .topbar{flex-wrap:wrap;gap:10px;}
+    .topbar .sub{display:none;}
+    .add-btn{margin-left:auto;}
+    .search{order:10;flex:1 1 100%;margin-left:0;}
+    .search input{width:100%;}
+    .search input:focus{width:100%;}
+    .board{gap:10px;}
+    .col{width:266px;min-width:266px;}
+    .cal-cell{min-height:76px;padding:4px 5px;}
+    .cal-cell .cd{min-width:19px;height:19px;font-size:11px;}
+    .cev{font-size:10.5px;padding:2px 5px;border-left-width:2px;}
+    .drawer{width:100vw;max-width:100vw;}
+  }
   .menu-btn{display:none;border:1px solid var(--line-2);background:var(--surface);color:var(--muted);width:34px;height:34px;border-radius:8px;cursor:pointer;align-items:center;justify-content:center;flex:none;}
 </style>
 </head>
