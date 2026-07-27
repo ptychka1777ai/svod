@@ -25,3 +25,7 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: DIGEST_HOUR
+        value: "8"
+      - key: CALENDAR_ICS_URL
+        sync: false
